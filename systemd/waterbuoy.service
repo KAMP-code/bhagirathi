@@ -1,0 +1,17 @@
+[Unit]
+Description=WaterBuoy camera capture + AWS IoT
+After=network-online.target local-fs.target
+Wants=network-online.target
+# If images go to an external drive, require its mount, e.g.:
+# RequiresMountsFor=/mnt/hdd
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/workplace/WaterBuoy
+ExecStart=/home/pi/workplace/WaterBuoy/.venv/bin/python -m waterbuoy -c config/config.toml
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

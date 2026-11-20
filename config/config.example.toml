@@ -1,0 +1,30 @@
+# WaterBuoy configuration. Copy to config/config.toml and edit.
+
+[device]
+# Used as the MQTT client id and in topic names. Should match the AWS IoT Thing name.
+thing_name = "waterbuoy-01"
+
+[capture]
+interval_seconds = 300          # 5 minutes
+align_to_clock = true           # capture at :00, :05, :10 ... instead of 5 min after start
+backend = "picamera2"           # "picamera2" | "rpicam-still" | "mock"
+width = 2304
+height = 1296
+jpeg_quality = 90
+
+[storage]
+# Point this at the mounted hard drive, e.g. /mnt/hdd/waterbuoy/images
+base_dir = "/home/pi/waterbuoy-data/images"
+# When free space drops below this, the oldest images are deleted.
+min_free_mb = 1024
+
+[iot]
+enabled = false
+endpoint = "xxxxxxxxxxxxxx-ats.iot.us-east-1.amazonaws.com"
+cert_path = "certs/device.pem.crt"
+key_path = "certs/private.pem.key"
+ca_path = "certs/AmazonRootCA1.pem"
+port = 8883
+keep_alive_seconds = 30
+# Topics; {thing} is replaced with device.thing_name
+topic_prefix = "waterbuoy/{thing}"
