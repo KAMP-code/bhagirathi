@@ -28,3 +28,17 @@ port = 8883
 keep_alive_seconds = 30
 # Topics; {thing} is replaced with device.thing_name
 topic_prefix = "waterbuoy/{thing}"
+
+[algae]
+# Algal-bloom screening of every capture (colour heuristic; result is added to the
+# IoT capture message). Tune on your own images: waterbuoy-algae scan <dir> --sort-into out/ --overlay
+enabled = true
+roi = [0.0, 0.0, 1.0, 1.0]      # [x0, y0, x1, y1] fractions; crop out sky/shore/buoy parts
+min_saturation = 0.30           # greyer pixels (foam, glare, colour cast) are ignored
+hue_min = 60.0                  # degrees, yellow-green
+hue_max = 170.0                 # degrees, blue-green
+min_exg = 0.04                  # excess-green index threshold
+green_margin = 0.12             # green must beat red and blue by 12%
+min_valid_fraction = 0.25       # fewer usable pixels (night/fog) -> "unknown"
+suspect_fraction = 0.05         # >= 5% bloom-coloured pixels -> "suspect"
+bloom_fraction = 0.20           # >= 20% -> "bloom"

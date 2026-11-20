@@ -12,6 +12,7 @@ src/waterbuoy/
   storage.py   dated folders, atomic writes, free-space retention
   iot.py       AWS IoT Core MQTT client (awsiotsdk)
   app.py       scheduler loop + command handling
+  algae.py     algal-bloom detection (colour indices) + scan CLI
 config/config.example.toml
 systemd/waterbuoy.service
 tests/
@@ -64,6 +65,33 @@ Example policy (replace region/account):
 | `waterbuoy/<thing>/cmd` | cloud → device | `{"action":"capture"}`, `{"action":"set_interval","seconds":600}`, `{"action":"status"}` |
 
 Capture keeps working if the network/IoT is down; the SDK reconnects automatically.
+
+## Algal-bloom detection
+
+With `[algae] enabled = true`, every capture is screened for algal bloom and the result is
+added to the `capture` MQTT message as `algae: {label, bloom_fraction, valid_fraction, ...}`.
+The label is one of:
+
+| label | meaning |
+|---|---|
+| `clean` | fewer than `suspect_fraction` of usable pixels are bloom-green |
+| `suspect` | between `suspect_fraction` and `bloom_fraction` |
+| `bloom` | at least `bloom_fraction` |
+| `unknown` | too few usable pixels (night, fog, glare) to decide |
+
+A pixel counts as bloom-green when it is well exposed, saturated (`min_saturation`), has a
+green hue (`hue_min`..`hue_max`), green beats red and blue by `green_margin`, and its
+excess-green index is above `min_exg`. This is a colour heuristic, not a lab test, so calibrate it
+on your own site. Use `roi` to crop out sky, shore vegetation or buoy parts. Fix the camera's
+white balance first, because a green cast reads as algae.
+
+Sort stored images into clean / contaminated sets:
+
+```bash
+.venv/bin/waterbuoy-algae scan /home/pi/waterbuoy-data/images -c config/config.toml \
+    --sort-into /tmp/algae-sorted --overlay --csv /tmp/algae.csv
+# -> /tmp/algae-sorted/{clean,suspect,bloom,unknown}/  (symlinks + magenta debug overlays)
+```
 
 ## Run
 

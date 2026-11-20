@@ -34,6 +34,7 @@ class BuoyApp:
         self.capture_count = 0
         self.error_count = 0
         self.last_image: str | None = None
+        self.last_algae: dict | None = None
 
         if self.iot is None and cfg.iot.enabled:
             from .iot import IotClient
@@ -55,11 +56,26 @@ class BuoyApp:
         self.last_image = str(path)
         size = path.stat().st_size
         log.info("saved %s (%d bytes, %.2fs, %s)", path, size, time.monotonic() - t0, trigger)
+        extra = {}
+        if self.cfg.algae.enabled:
+            extra["algae"] = self._analyze_algae(path)
         if self.iot:
             self.iot.publish_capture(
                 file=str(path), size_bytes=size, captured_at=ts.isoformat(), trigger=trigger,
-                **self.store.stats(),
+                **extra, **self.store.stats(),
             )
+
+    def _analyze_algae(self, path) -> dict:
+        # Analysis must never break capture: report the error in the payload instead.
+        try:
+            from .algae import analyze_image
+            res = analyze_image(path, self.cfg.algae).to_dict()
+        except Exception as e:  # noqa: BLE001
+            log.exception("algae analysis failed for %s", path)
+            return {"label": "error", "error": str(e)[:200]}
+        log.info("algae: %s (bloom %.1f%% of valid pixels)", res["label"], res["bloom_fraction"] * 100)
+        self.last_algae = res
+        return res
 
     # --- commands --------------------------------------------------------
     def handle_command(self, cmd: dict) -> None:
@@ -84,7 +100,7 @@ class BuoyApp:
         if self.iot:
             self.iot.publish_status(
                 "online", interval_seconds=self.interval, captures=self.capture_count,
-                errors=self.error_count, last_image=self.last_image, **self.store.stats(),
+                errors=self.error_count, last_image=self.last_image, last_algae=self.last_algae, **self.store.stats(),
             )
 
     # --- main loop -------------------------------------------------------

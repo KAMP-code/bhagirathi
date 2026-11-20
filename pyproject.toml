@@ -9,6 +9,8 @@ description = "Water buoy camera node: periodic image capture with AWS IoT Core 
 requires-python = ">=3.11"
 dependencies = [
     "awsiotsdk>=1.21",
+    "numpy>=1.24",
+    "pillow>=9",
 ]
 
 [project.optional-dependencies]
@@ -16,6 +18,7 @@ dev = ["pytest>=8"]
 
 [project.scripts]
 waterbuoy = "waterbuoy.__main__:main"
+waterbuoy-algae = "waterbuoy.algae:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -23,3 +26,8 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    "camera: needs a real Raspberry Pi camera (skipped if none; WATERBUOY_REQUIRE_CAMERA=1 to fail instead)",
+    "no_camera: runs only when no camera is attached (error-path checks)",
+    "rpicam: needs the rpicam-still binary",
+]
