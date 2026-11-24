@@ -193,14 +193,16 @@ clf = WaterClassifier()
 print(clf.classify("testimages/dirty-water-001.png"))   # dirty_water (water 0.54, green 0.25, red 0.02)
 ```
 
-The demo watches the webcam; when it sees dirty water (2 frames in a row) the servo on
-GPIO16 turns to 180 degrees, waits 5 s and returns to 0. Show it water pictures on a phone,
-a screen or on paper.
+`check_water.py` takes a webcam photo every 5 s; if it shows dirty water the servo on
+GPIO16 turns to 180 degrees, waits 5 s and returns to 0.
+
+`water_demo.py` uses the distance sensor instead of the camera: when something is closer
+than 15 cm (2 readings in a row) the servo turns to 180 degrees, waits 5 s and returns to 0.
+It fires again only after the object has moved away.
 
 ```bash
-.venv/bin/python scripts/water_demo.py                      # live webcam + preview window
-.venv/bin/python scripts/water_demo.py --no-show            # no window
-.venv/bin/python scripts/water_demo.py --images testimages/*   # classify files
+.venv/bin/python scripts/water_demo.py                      # distance sensor -> servo (< 15 cm)
+.venv/bin/python scripts/water_demo.py --threshold 10       # trigger below 10 cm
 .venv/bin/python scripts/check_water.py                    # photo every 5 s -> classify -> servo if dirty
 .venv/bin/pytest tests/integration/test_water_classifier_hw.py -v
 ```

@@ -1,4 +1,4 @@
-"""Dirty-water colour measures and the demo's servo alarm logic (no hardware, no model)."""
+"""Dirty-water colour measures and the proximity demo's servo alarm logic (no hardware, no model)."""
 
 import importlib.util
 from pathlib import Path
@@ -60,7 +60,7 @@ def test_red_fraction():
 def make_alarm(demo):
     d = FakeDriver()
     s = Servo(16, driver=d)
-    alarm = demo.DirtyWaterAlarm(s, hold_s=0, confirm=2)
+    alarm = demo.ProximityAlarm(s, threshold_cm=15, hold_s=0, confirm=2)
     d.pulses.clear()
     return alarm, d, s
 
@@ -68,21 +68,21 @@ def make_alarm(demo):
 def test_alarm_needs_confirmation_and_cycles_servo():
     demo = load_demo()
     alarm, d, s = make_alarm(demo)
-    assert alarm.update("dirty_water") is False             # 1st dirty frame: not yet
-    assert alarm.update("dirty_water") is True              # confirmed
+    assert alarm.update(10.0) is False                      # 1st close reading: not yet
+    assert alarm.update(9.5) is True                        # confirmed
     assert d.pulses == [s.pulse_for(180), s.pulse_for(0)]   # out to 180 and back to 0
     assert not s.attached                                   # released while idle
 
 
-def test_alarm_fires_once_until_rearmed():
+def test_alarm_fires_once_until_object_moves_away():
     demo = load_demo()
-    alarm, d, _ = make_alarm(demo)
-    fired = [alarm.update(label) for label in
-             ["dirty_water"] * 5 + ["clean_water"] + ["dirty_water"] * 2 + ["no_water", "dirty_water"]]
+    alarm, _, _ = make_alarm(demo)
+    fired = [alarm.update(cm) for cm in [5.0] * 5 + [40.0] + [12.0] * 2 + [None, 14.9]]
     assert fired == [False, True, False, False, False, False, False, True, False, False]
 
 
-def test_single_dirty_frames_do_not_fire():
+def test_far_or_missing_readings_do_not_fire():
     demo = load_demo()
     alarm, _, _ = make_alarm(demo)
-    assert not any(alarm.update(label) for label in ["dirty_water", "clean_water"] * 5)
+    assert not any(alarm.update(cm) for cm in [15.0, 30.0, None, 200.0, 15.0])   # 15 cm is not closer
+    assert not any(alarm.update(cm) for cm in [10.0, 50.0] * 5)                  # single close readings
