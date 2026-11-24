@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Servo demo for the TowerPro SG90 on GPIO16.
+"""Hobby servo demo on GPIO16.
 
     .venv/bin/python scripts/servo_demo.py              # full demo
     .venv/bin/python scripts/servo_demo.py --angle 45   # go to 45 degrees and hold

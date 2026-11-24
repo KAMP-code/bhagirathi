@@ -29,7 +29,7 @@ def servo():
 
 
 @pytest.mark.parametrize("angle, pulse", [(0, 500), (90, 1450), (180, 2400), (45, 975)])
-def test_angle_to_pulse_sg90_defaults(servo, angle, pulse):
+def test_angle_to_pulse_defaults(servo, angle, pulse):
     servo.angle = angle
     assert servo.driver.pulses[-1][:2] == (pulse, 50)
     assert servo.angle == angle and servo.attached

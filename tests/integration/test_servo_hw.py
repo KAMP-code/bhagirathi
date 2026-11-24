@@ -1,10 +1,10 @@
-"""Integration tests for the servo on GPIO16 (TowerPro SG90).
+"""Integration tests for the servo on GPIO16.
 
 Run:  pytest tests/integration/test_servo_hw.py -v
 Pin:  WATERBUOY_SERVO_PIN=16 (default)
 
 These tests move the servo and measure the real control signal by reading the pin back:
-pulse width (sets the angle) and pulse frequency (50 Hz). An SG90 has no position
+pulse width (sets the angle) and pulse frequency (50 Hz). A hobby servo has no position
 feedback, so the signal is what can be verified; watch the horn to see that it follows.
 Fails if the GPIO pin cannot be driven.
 """
