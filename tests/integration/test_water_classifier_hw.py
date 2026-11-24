@@ -1,9 +1,9 @@
-"""Integration tests for the water classifier (YOLOv8) and the green-water servo demo.
+"""Integration tests for the water classifier (YOLOv8) and the dirty-water servo demo.
 
 Run:  pytest tests/integration/test_water_classifier_hw.py -v
 
 Needs the ultralytics package (the yolov8s-cls.pt weights are downloaded on first use),
-the test images in testimages/ (named clean-* / green-*), the webcam, and the servo on
+the test images in testimages/ (named clean-* / dirty-*), the webcam, and the servo on
 GPIO16 (the demo test moves it to 180 degrees and back).
 """
 
@@ -22,8 +22,9 @@ pytest.importorskip("ultralytics", reason="pip install -e .[vision]")
 from waterbuoy.water_classifier import LABELS, WaterClassifier  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
-IMAGES = sorted(p for p in (ROOT / "testimages").glob("*") if p.suffix.lower() in {".png", ".jpg", ".jpeg"})
-EXPECTED = {"clean": "clean_water", "green": "green_water"}
+IMAGES = sorted(p for p in (ROOT / "testimages").glob("*")
+                if p.suffix.lower() in {".png", ".jpg", ".jpeg"} and p.name.split("-")[0] in ("clean", "dirty"))
+EXPECTED = {"clean": "clean_water", "dirty": "dirty_water"}
 
 
 @pytest.fixture(scope="module")
@@ -64,17 +65,17 @@ def test_classifies_a_webcam_frame_quickly(clf):
     assert r.label in LABELS
 
 
-def test_demo_turns_servo_for_green_water_only():
-    green = [p for p in IMAGES if p.name.startswith("green")][:1]
+def test_demo_turns_servo_for_dirty_water_only():
+    dirty = [p for p in IMAGES if p.name.startswith("dirty")][:1]
     clean = [p for p in IMAGES if p.name.startswith("clean")][:1]
-    assert green and clean
+    assert dirty and clean
     t = time.monotonic()
     out = subprocess.run(
         [sys.executable, str(ROOT / "scripts" / "water_demo.py"), "--hold", "1",
-         "--images", str(clean[0]), str(green[0])],
+         "--images", str(clean[0]), str(dirty[0])],
         capture_output=True, text=True, timeout=120,
     )
     assert out.returncode == 0, out.stderr
-    assert out.stdout.count("GREEN WATER") == 1, out.stdout
+    assert out.stdout.count("DIRTY WATER") == 1, out.stdout
     assert "clean_water" in out.stdout and "servo -> 0 deg" in out.stdout
     assert time.monotonic() - t >= 1

@@ -1,4 +1,4 @@
-"""Green-water colour measure and the demo's servo alarm logic (no hardware, no model)."""
+"""Dirty-water colour measures and the demo's servo alarm logic (no hardware, no model)."""
 
 import importlib.util
 from pathlib import Path
@@ -7,7 +7,7 @@ import numpy as np
 from PIL import Image
 
 from waterbuoy.servo import Servo
-from waterbuoy.water_classifier import green_fraction
+from waterbuoy.water_classifier import green_fraction, red_fraction
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -48,10 +48,19 @@ def test_green_fraction():
     assert green_fraction(Image.fromarray(half)) == 0.5
 
 
+def test_red_fraction():
+    assert red_fraction(solid((170, 60, 30))) == 1.0        # red tide, rust
+    assert red_fraction(solid((200, 30, 40))) == 1.0        # red, hue just below 360
+    assert red_fraction(solid((210, 190, 150))) == 0.0      # pale sand
+    assert red_fraction(solid((40, 90, 200))) == 0.0        # blue water
+    assert red_fraction(solid((60, 200, 40))) == 0.0        # green
+    assert red_fraction(solid((20, 5, 5))) == 0.0           # too dark to judge
+
+
 def make_alarm(demo):
     d = FakeDriver()
     s = Servo(16, driver=d)
-    alarm = demo.GreenWaterAlarm(s, hold_s=0, confirm=2)
+    alarm = demo.DirtyWaterAlarm(s, hold_s=0, confirm=2)
     d.pulses.clear()
     return alarm, d, s
 
@@ -59,8 +68,8 @@ def make_alarm(demo):
 def test_alarm_needs_confirmation_and_cycles_servo():
     demo = load_demo()
     alarm, d, s = make_alarm(demo)
-    assert alarm.update("green_water") is False             # 1st green frame: not yet
-    assert alarm.update("green_water") is True              # confirmed
+    assert alarm.update("dirty_water") is False             # 1st dirty frame: not yet
+    assert alarm.update("dirty_water") is True              # confirmed
     assert d.pulses == [s.pulse_for(180), s.pulse_for(0)]   # out to 180 and back to 0
     assert not s.attached                                   # released while idle
 
@@ -69,11 +78,11 @@ def test_alarm_fires_once_until_rearmed():
     demo = load_demo()
     alarm, d, _ = make_alarm(demo)
     fired = [alarm.update(label) for label in
-             ["green_water"] * 5 + ["clean_water"] + ["green_water"] * 2 + ["no_water", "green_water"]]
+             ["dirty_water"] * 5 + ["clean_water"] + ["dirty_water"] * 2 + ["no_water", "dirty_water"]]
     assert fired == [False, True, False, False, False, False, False, True, False, False]
 
 
-def test_single_green_frames_do_not_fire():
+def test_single_dirty_frames_do_not_fire():
     demo = load_demo()
     alarm, _, _ = make_alarm(demo)
-    assert not any(alarm.update(label) for label in ["green_water", "clean_water"] * 5)
+    assert not any(alarm.update(label) for label in ["dirty_water", "clean_water"] * 5)

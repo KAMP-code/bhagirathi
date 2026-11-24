@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Green-water alarm demo: camera -> water classifier -> servo.
+"""Dirty-water alarm demo: camera -> water classifier -> servo.
 
-Each webcam frame is classified as clean water, green water or no water. When green
-water is seen (in 2 frames in a row) the servo turns to 180 degrees, waits 5 seconds
+Each webcam frame is classified as clean water, dirty water or no water. When dirty
+water (algae bloom or red tide) is seen (in 2 frames in a row) the servo turns to 180 degrees, waits 5 seconds
 and returns to 0. It triggers again only after the camera has seen something that is
-not green water, so a green picture held in front of the camera fires once.
+not dirty water, so a dirty-water picture held in front of the camera fires once.
 
 Show water pictures to the webcam (on a phone, a screen or printed).
 
@@ -30,11 +30,11 @@ from waterbuoy.servo import Servo  # noqa: E402
 from waterbuoy.water_classifier import WaterClassifier, WaterResult  # noqa: E402
 
 REST_ANGLE, ALARM_ANGLE = 0, 180
-COLOURS = {"green_water": (0, 200, 0), "clean_water": (255, 160, 0), "no_water": (160, 160, 160)}  # BGR
+COLOURS = {"dirty_water": (0, 0, 230), "clean_water": (255, 160, 0), "no_water": (160, 160, 160)}  # BGR
 
 
-class GreenWaterAlarm:
-    """Turns the servo when green water is confirmed in `confirm` consecutive results."""
+class DirtyWaterAlarm:
+    """Turns the servo when dirty water is confirmed in `confirm` consecutive results."""
 
     def __init__(self, servo: Servo, hold_s: float = 5.0, confirm: int = 2):
         self.servo, self.hold_s, self.confirm = servo, hold_s, confirm
@@ -46,7 +46,7 @@ class GreenWaterAlarm:
 
     def update(self, label: str) -> bool:
         """Feed one classification; returns True if the servo was cycled."""
-        if label != "green_water":
+        if label != "dirty_water":
             self.streak = 0
             self.armed = True
             return False
@@ -59,7 +59,7 @@ class GreenWaterAlarm:
 
     def trigger(self) -> None:
         """Servo to the alarm angle, hold, and back to rest."""
-        print(f"  >>> GREEN WATER: servo -> {ALARM_ANGLE} deg, holding {self.hold_s:g} s", flush=True)
+        print(f"  >>> DIRTY WATER: servo -> {ALARM_ANGLE} deg, holding {self.hold_s:g} s", flush=True)
         self.servo.angle = ALARM_ANGLE
         time.sleep(self.hold_s)
         print(f"  <<< servo -> {REST_ANGLE} deg", flush=True)
@@ -83,18 +83,18 @@ def default_camera_device() -> str:
 
 def describe(r: WaterResult) -> str:
     top = ", ".join(f"{n} {p:.2f}" for n, p in r.top_classes[:3])
-    return f"{r.label:<12} water={r.water_score:.2f} green={r.green_fraction:.2f}  [{top}]"
+    return f"{r.label:<12} water={r.water_score:.2f} green={r.green_fraction:.2f} red={r.red_fraction:.2f}  [{top}]"
 
 
-def run_images(clf: WaterClassifier, alarm: GreenWaterAlarm, paths: list[str]) -> None:
+def run_images(clf: WaterClassifier, alarm: DirtyWaterAlarm, paths: list[str]) -> None:
     for p in paths:
         r = clf.classify(p)
         print(f"{Path(p).name:<28} {describe(r)}", flush=True)
-        if r.label == "green_water":      # each file is independent: no confirmation
+        if r.label == "dirty_water":      # each file is independent: no confirmation
             alarm.trigger()
 
 
-def run_camera(clf: WaterClassifier, alarm: GreenWaterAlarm, device: str, show: bool) -> None:
+def run_camera(clf: WaterClassifier, alarm: DirtyWaterAlarm, device: str, show: bool) -> None:
     import cv2
 
     cap = cv2.VideoCapture(device, cv2.CAP_V4L2)
@@ -116,7 +116,7 @@ def run_camera(clf: WaterClassifier, alarm: GreenWaterAlarm, device: str, show: 
                 print(time.strftime("%H:%M:%S"), describe(r), flush=True)
                 last = r.label
             if show:
-                txt = f"{r.label}  water {r.water_score:.2f}  green {r.green_fraction:.2f}"
+                txt = f"{r.label}  water {r.water_score:.2f}  green {r.green_fraction:.2f}  red {r.red_fraction:.2f}"
                 cv2.rectangle(frame, (0, 0), (frame.shape[1], 36), (0, 0, 0), -1)
                 cv2.putText(frame, txt, (10, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.8, COLOURS[r.label], 2)
                 cv2.imshow("water demo", frame)
@@ -143,7 +143,7 @@ def main() -> None:
     print("loading YOLOv8 classifier...", flush=True)
     clf = WaterClassifier()
     with Servo(args.servo_pin) as servo:
-        alarm = GreenWaterAlarm(servo, hold_s=args.hold)
+        alarm = DirtyWaterAlarm(servo, hold_s=args.hold)
         try:
             if args.images:
                 run_images(clf, alarm, args.images)

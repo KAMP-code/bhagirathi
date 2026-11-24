@@ -1,4 +1,4 @@
-"""Classify an image as clean water, green water or no water, with no training.
+"""Classify an image as clean water, dirty water or no water, with no training.
 
 Two steps:
 
@@ -7,15 +7,18 @@ Two steps:
    boats and water animals (lakeside, dam, sandbar, canoe, water snake, coral reef...).
    The total probability the model puts on those classes is the *water score*: photos
    of water score ~0.6-0.7, a room or a person ~0.01.
-2. **Green or clean** - the fraction of the image that is strongly green (hue 60-150
-   degrees, saturation >= 0.3, not dark). Algae blooms and scum are lime/pea green over
-   much of the frame; clean water is blue, grey or shows the brown bed.
+2. **Dirty or clean** - water is dirty when enough of the image is discoloured:
+   - *green fraction*: strongly green pixels (hue 60-150 degrees, saturation >= 0.3).
+     Algae blooms and scum are lime/pea green over much of the frame.
+   - *red fraction*: saturated red / rust pixels (hue 345-30 degrees, saturation >= 0.3).
+     Red tides are red-brown; sand and beaches are paler and more yellow (hue 30-50).
+   Clean water is blue, grey or shows the brown bed. Pixels too dark to judge are ignored.
 
     from waterbuoy.water_classifier import WaterClassifier
 
     clf = WaterClassifier()
     r = clf.classify("photo.jpg")      # path, PIL image, or RGB numpy array
-    r.label                            # "clean_water" | "green_water" | "no_water"
+    r.label                            # "clean_water" | "dirty_water" | "no_water"
 
 The YOLOv8 weights (yolov8s-cls.pt, ~13 MB) are downloaded once into `model_dir`.
 Requires the `ultralytics` package (`pip install -e .[vision]`).
@@ -32,7 +35,7 @@ from PIL import Image
 
 log = logging.getLogger(__name__)
 
-LABELS = ("clean_water", "green_water", "no_water")
+LABELS = ("clean_water", "dirty_water", "no_water")
 DEFAULT_MODEL = "yolov8s-cls.pt"
 DEFAULT_MODEL_DIR = Path.home() / "waterbuoy-data" / "models"
 
@@ -61,18 +64,22 @@ WATER_CLASSES = (
 
 GREEN_HUE = (60.0, 150.0)   # degrees
 GREEN_MIN_SAT = 0.30
+RED_HUE = (345.0, 30.0)     # degrees, wraps through 0
+RED_MIN_SAT = 0.30
 MIN_VALUE = 0.15            # ignore dark pixels (shadow, night)
 
 
 @dataclass
 class WaterResult:
-    label: str                  # "clean_water" | "green_water" | "no_water"
+    label: str                  # "clean_water" | "dirty_water" | "no_water"
     water_score: float          # probability mass on water classes, 0..1
     green_fraction: float       # strongly green pixels / well-lit pixels, 0..1
+    red_fraction: float = 0.0   # red / rust pixels / well-lit pixels, 0..1
     top_classes: list[tuple[str, float]] = field(default_factory=list)  # YOLO top 5
 
     def __str__(self) -> str:
-        return f"{self.label} (water {self.water_score:.2f}, green {self.green_fraction:.2f})"
+        return (f"{self.label} (water {self.water_score:.2f}, green {self.green_fraction:.2f}, "
+                f"red {self.red_fraction:.2f})")
 
 
 def to_rgb_image(image: str | Path | Image.Image | np.ndarray) -> Image.Image:
@@ -88,8 +95,8 @@ def to_rgb_image(image: str | Path | Image.Image | np.ndarray) -> Image.Image:
     return Image.fromarray(arr.astype(np.uint8), "RGB")
 
 
-def green_fraction(img: Image.Image, size: int = 320) -> float:
-    """Fraction of well-lit pixels that are strongly green."""
+def colour_fractions(img: Image.Image, size: int = 320) -> tuple[float, float]:
+    """(green, red) fractions of well-lit pixels: strongly green, and red / rust."""
     small = img.copy()
     small.thumbnail((size, size))
     hsv = np.asarray(small.convert("HSV"), dtype=np.float32) / 255.0
@@ -97,16 +104,28 @@ def green_fraction(img: Image.Image, size: int = 320) -> float:
     lit = v >= MIN_VALUE
     n = int(lit.sum())
     if n == 0:
-        return 0.0
+        return 0.0, 0.0
     green = lit & (h >= GREEN_HUE[0]) & (h <= GREEN_HUE[1]) & (s >= GREEN_MIN_SAT)
-    return float(green.sum()) / n
+    red = lit & ((h >= RED_HUE[0]) | (h < RED_HUE[1])) & (s >= RED_MIN_SAT)
+    return float(green.sum()) / n, float(red.sum()) / n
+
+
+def green_fraction(img: Image.Image, size: int = 320) -> float:
+    """Fraction of well-lit pixels that are strongly green."""
+    return colour_fractions(img, size)[0]
+
+
+def red_fraction(img: Image.Image, size: int = 320) -> float:
+    """Fraction of well-lit pixels that are red / rust (red tide)."""
+    return colour_fractions(img, size)[1]
 
 
 class WaterClassifier:
-    """clean water / green water / no water, from a pretrained YOLOv8 classifier plus colour.
+    """clean water / dirty water / no water, from a pretrained YOLOv8 classifier plus colour.
 
     `water_threshold`: minimum water score to call it water (water photos ~0.6, rooms ~0.01).
-    `green_threshold`: minimum green fraction to call water green (clean ~0.01, blooms 0.25+).
+    `green_threshold`: minimum green fraction to call water dirty (clean ~0.01, blooms 0.25+).
+    `red_threshold`: minimum red fraction to call water dirty (clean/sand <= 0.02, red tide 0.15+).
     """
 
     def __init__(
@@ -116,6 +135,7 @@ class WaterClassifier:
         model_dir: str | Path = DEFAULT_MODEL_DIR,
         water_threshold: float = 0.15,
         green_threshold: float = 0.10,
+        red_threshold: float = 0.08,
     ):
         try:
             from ultralytics import YOLO
@@ -123,6 +143,7 @@ class WaterClassifier:
             raise RuntimeError("ultralytics not installed; run: pip install -e .[vision]") from e
         self.water_threshold = water_threshold
         self.green_threshold = green_threshold
+        self.red_threshold = red_threshold
         path = Path(model)
         if not path.is_absolute():
             path = Path(model_dir) / path
@@ -148,12 +169,12 @@ class WaterClassifier:
         r = self.model(np.asarray(img)[..., ::-1], verbose=False)[0]
         probs = r.probs.data.cpu().numpy()
         water = float(probs[self.water_ids].sum())
-        green = green_fraction(img)
+        green, red = colour_fractions(img)
         if water < self.water_threshold:
             label = "no_water"
-        elif green >= self.green_threshold:
-            label = "green_water"
+        elif green >= self.green_threshold or red >= self.red_threshold:
+            label = "dirty_water"
         else:
             label = "clean_water"
         top = [(r.names[i], round(float(probs[i]), 3)) for i in r.probs.top5]
-        return WaterResult(label, water, green, top)
+        return WaterResult(label, water, green, red, top)

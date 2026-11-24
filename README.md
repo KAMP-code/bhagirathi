@@ -15,10 +15,11 @@ src/waterbuoy/
   algae.py     algal-bloom detection (colour indices) + scan CLI
   servo.py     hobby servo control on any GPIO pin via lgpio
   distance_sensor.py  ultrasonic distance sensor (Trig/Echo) via lgpio
-  water_classifier.py clean / green / no water (pretrained YOLOv8, no training)
+  water_classifier.py clean / dirty / no water (pretrained YOLOv8, no training)
 scripts/servo_demo.py
 scripts/distance_demo.py
 scripts/water_demo.py
+scripts/check_water.py
 config/config.example.toml
 systemd/waterbuoy.service
 tests/
@@ -172,13 +173,14 @@ with DistanceSensor(trig=23, echo=24) as d:
 
 The integration test needs the sensor pointed at something still within 2 cm - 4 m.
 
-## Water classifier and green-water demo
+## Water classifier and dirty-water demo
 
-`water_classifier.py` labels an image `clean_water`, `green_water` or `no_water` with no
+`water_classifier.py` labels an image `clean_water`, `dirty_water` or `no_water` with no
 training. A pretrained YOLOv8 ImageNet classifier (`yolov8s-cls.pt`, downloaded once to
 `~/waterbuoy-data/models/`) decides *water or not*: the probability it gives to water
 scenes, boats and water animals (lakeside, dam, canoe, water snake...) is the water score.
-The share of strongly green pixels then separates green from clean water.
+Water is dirty when enough of the image is discoloured: strongly green pixels (algae bloom)
+or saturated red / rust pixels (red tide).
 
 ```bash
 .venv/bin/pip install -e .[vision]          # ultralytics (YOLOv8)
@@ -188,10 +190,10 @@ The share of strongly green pixels then separates green from clean water.
 from waterbuoy.water_classifier import WaterClassifier
 
 clf = WaterClassifier()
-print(clf.classify("testimages/green-water-001.png"))   # green_water (water 0.54, green 0.25)
+print(clf.classify("testimages/dirty-water-001.png"))   # dirty_water (water 0.54, green 0.25, red 0.02)
 ```
 
-The demo watches the webcam; when it sees green water (2 frames in a row) the servo on
+The demo watches the webcam; when it sees dirty water (2 frames in a row) the servo on
 GPIO16 turns to 180 degrees, waits 5 s and returns to 0. Show it water pictures on a phone,
 a screen or on paper.
 
@@ -199,10 +201,11 @@ a screen or on paper.
 .venv/bin/python scripts/water_demo.py                      # live webcam + preview window
 .venv/bin/python scripts/water_demo.py --no-show            # no window
 .venv/bin/python scripts/water_demo.py --images testimages/*   # classify files
+.venv/bin/python scripts/check_water.py                    # photo every 5 s -> classify -> servo if dirty
 .venv/bin/pytest tests/integration/test_water_classifier_hw.py -v
 ```
 
-Thresholds (`water_threshold=0.15`, `green_threshold=0.10`) were set on the images in
+Thresholds (`water_threshold=0.15`, `green_threshold=0.10`, `red_threshold=0.08`) were set on the images in
 `testimages/`; check them on pictures from the real site.
 
 ## Run
