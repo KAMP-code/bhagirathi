@@ -17,21 +17,26 @@ class ImageStore:
         self.min_free_bytes = min_free_mb * 1024 * 1024
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
-    def path_for(self, ts: datetime) -> Path:
-        """<base>/YYYY/MM/DD/YYYYMMDDTHHMMSSZ.jpg (UTC)."""
+    def path_for(self, ts: datetime, camera: str | None = None) -> Path:
+        """<base>/YYYY/MM/DD/YYYYMMDDTHHMMSSZ[_<camera>].jpg (UTC).
+
+        The timestamp comes first so file names still sort chronologically across cameras
+        (retention deletes the oldest first).
+        """
         ts = ts.astimezone(timezone.utc)
         day_dir = self.base_dir / f"{ts:%Y}" / f"{ts:%m}" / f"{ts:%d}"
-        path = day_dir / f"{ts:%Y%m%dT%H%M%SZ}.jpg"
+        stem = f"{ts:%Y%m%dT%H%M%SZ}" + (f"_{camera}" if camera else "")
+        path = day_dir / f"{stem}.jpg"
         n = 1
         while path.exists():  # two captures in the same second (e.g. manual + scheduled)
-            path = day_dir / f"{ts:%Y%m%dT%H%M%SZ}_{n}.jpg"
+            path = day_dir / f"{stem}_{n}.jpg"
             n += 1
         return path
 
-    def save(self, ts: datetime, writer) -> Path:
+    def save(self, ts: datetime, writer, camera: str | None = None) -> Path:
         """Call writer(tmp_path) to produce the image, then atomically move it into place."""
         self.ensure_free_space()
-        dest = self.path_for(ts)
+        dest = self.path_for(ts, camera)
         dest.parent.mkdir(parents=True, exist_ok=True)
         tmp = dest.with_name(dest.name + ".part")
         try:

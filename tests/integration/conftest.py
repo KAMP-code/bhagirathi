@@ -1,54 +1,86 @@
 """Fixtures for camera hardware integration tests.
 
-Tests marked ``camera`` need a real Raspberry Pi camera. They are skipped when none is
-detected, unless WATERBUOY_REQUIRE_CAMERA=1 is set, in which case they fail instead
-(use that on a deployed buoy so a missing camera is not silently ignored).
+A camera is always required: the tests detect every attached camera (USB webcams and
+Raspberry Pi ribbon cameras) and run against each one. With no camera attached they FAIL.
 
-Tests marked ``no_camera`` check error handling and only run when NO camera is attached.
+Tests that only apply to one kind of camera (e.g. ribbon-camera tests on a buoy that only
+has USB webcams) are reported as skipped with "got empty parameter set".
 """
 
 from __future__ import annotations
 
-import os
-import shutil
+from dataclasses import replace
 from functools import lru_cache
 
 import pytest
 
-from waterbuoy.config import CaptureConfig
+from waterbuoy.camera import list_csi_cameras, list_usb_cameras
+from waterbuoy.config import CameraConfig
 
-REQUIRE_CAMERA = os.environ.get("WATERBUOY_REQUIRE_CAMERA") == "1"
-
-# Small resolution keeps the tests fast; still exercises the full pipeline.
-TEST_WIDTH, TEST_HEIGHT = 1280, 720
+# Small resolutions keep the tests fast; tried in this order, else the camera's largest.
+PREFERRED_TEST_SIZES = [(1280, 720), (640, 480)]
 
 
 @lru_cache(maxsize=1)
-def camera_count() -> int:
-    try:
-        from picamera2 import Picamera2
-    except ImportError:
-        return 0
-    try:
-        return len(Picamera2.global_camera_info())
-    except Exception:  # noqa: BLE001 - libcamera unavailable
-        return 0
+def usb_cameras() -> tuple[dict, ...]:
+    return tuple(list_usb_cameras())
 
 
-@pytest.fixture(autouse=True)
-def _camera_gate(request):
-    present = camera_count() > 0
-    if request.node.get_closest_marker("camera") and not present:
-        msg = "no Raspberry Pi camera detected (Picamera2.global_camera_info() is empty)"
-        if REQUIRE_CAMERA:
-            pytest.fail(f"WATERBUOY_REQUIRE_CAMERA=1 but {msg}")
-        pytest.skip(msg)
-    if request.node.get_closest_marker("no_camera") and present:
-        pytest.skip("camera is attached; missing-camera behaviour cannot be tested")
-    if request.node.get_closest_marker("rpicam") and shutil.which("rpicam-still") is None:
-        pytest.skip("rpicam-still not installed")
+@lru_cache(maxsize=1)
+def csi_cameras() -> tuple[dict, ...]:
+    return tuple(list_csi_cameras())
 
 
-@pytest.fixture
-def capture_cfg() -> CaptureConfig:
-    return CaptureConfig(width=TEST_WIDTH, height=TEST_HEIGHT, jpeg_quality=85, align_to_clock=False)
+def all_cameras() -> tuple[dict, ...]:
+    return usb_cameras() + csi_cameras()
+
+
+def cam_id(info: dict) -> str:
+    if info["backend"] == "usb":
+        return f"usb:{info['node']}"
+    return f"csi:{info['index']}"
+
+
+def usb_test_size(info: dict) -> tuple[int, int]:
+    for size in PREFERRED_TEST_SIZES:
+        if any(sizes is None or size in sizes for sizes in info["formats"].values()):
+            return size
+    return 0, 0
+
+
+def usb_config(info: dict, name: str = "usb", **kw) -> CameraConfig:
+    w, h = usb_test_size(info)
+    cfg = CameraConfig(name=name, backend="usb", device=info["device"], width=w, height=h,
+                       jpeg_quality=85, warmup_frames=10)  # fewer warm-up frames: quicker tests
+    return replace(cfg, **kw)
+
+
+def csi_config(info: dict, backend: str, name: str = "csi", **kw) -> CameraConfig:
+    cfg = CameraConfig(name=name, backend=backend, device=info["device"], width=1280, height=720,
+                       jpeg_quality=85)
+    return replace(cfg, **kw)
+
+
+def camera_config(info: dict, name: str) -> CameraConfig:
+    return usb_config(info, name) if info["backend"] == "usb" else csi_config(info, "picamera2", name)
+
+
+def pytest_generate_tests(metafunc):
+    if "usb_info" in metafunc.fixturenames:
+        metafunc.parametrize("usb_info", usb_cameras(), ids=cam_id)
+    if "csi_info" in metafunc.fixturenames:
+        metafunc.parametrize("csi_info", csi_cameras(), ids=cam_id)
+    if "usb_format" in metafunc.fixturenames:
+        pairs = [(c, f) for c in usb_cameras() for f in c["formats"]]
+        metafunc.parametrize("usb_format", pairs, ids=lambda p: f"{cam_id(p[0])}-{p[1]}")
+    if "cam_info" in metafunc.fixturenames:
+        metafunc.parametrize("cam_info", all_cameras(), ids=cam_id)
+
+
+@pytest.fixture(scope="session")
+def attached_cameras() -> tuple[dict, ...]:
+    cams = all_cameras()
+    if not cams:
+        pytest.fail("no camera detected: plug in a USB webcam or a Raspberry Pi camera "
+                    "(check `python -m waterbuoy --list-cameras`)")
+    return cams

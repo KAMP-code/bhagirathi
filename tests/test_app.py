@@ -1,10 +1,12 @@
 import json
+
+import pytest
 import threading
 import time
 from datetime import datetime, timezone
 
 from waterbuoy.app import BuoyApp, seconds_until_next
-from waterbuoy.config import CaptureConfig, Config, StorageConfig, load_config
+from waterbuoy.config import CameraConfig, CaptureConfig, Config, StorageConfig, load_config
 from waterbuoy.camera import MockCamera
 from waterbuoy.storage import ImageStore
 
@@ -26,12 +28,13 @@ class FakeIot:
         pass
 
 
-def make_app(tmp_path, interval=300):
+def make_app(tmp_path, interval=300, names=("cam0",)):
     cfg = Config(
-        capture=CaptureConfig(interval_seconds=interval, backend="mock", width=64, height=48, align_to_clock=False),
+        capture=CaptureConfig(interval_seconds=interval, align_to_clock=False),
+        cameras=[CameraConfig(name=n, backend="mock", width=64, height=48) for n in names],
         storage=StorageConfig(base_dir=tmp_path, min_free_mb=0),
     )
-    return BuoyApp(cfg, camera=MockCamera(cfg.capture), iot=FakeIot())
+    return BuoyApp(cfg, iot=FakeIot())
 
 
 def test_seconds_until_next_aligned():
@@ -46,6 +49,10 @@ def test_store_paths_are_dated_and_unique(tmp_path):
     p2 = store.save(ts, lambda p: p.write_bytes(b"b"))
     assert p1 == tmp_path / "2026/11/20/20261120T130500Z.jpg"
     assert p2.name == "20261120T130500Z_1.jpg"
+    p3 = store.save(ts, lambda p: p.write_bytes(b"c"), camera="north")
+    p4 = store.save(ts, lambda p: p.write_bytes(b"d"), camera="north")
+    assert p3.name == "20261120T130500Z_north.jpg"
+    assert p4.name == "20261120T130500Z_north_1.jpg"
     assert not list(tmp_path.rglob("*.part"))
 
 
@@ -95,3 +102,72 @@ def test_example_config_loads(tmp_path):
     assert cfg.capture.interval_seconds == 300
     assert cfg.topic_prefix == "waterbuoy/waterbuoy-01"
     assert cfg.iot.cert_path.is_absolute()
+    assert [(c.name, c.backend, c.jpeg_quality) for c in cfg.cameras] == [("cam0", "usb", 90)]
+
+
+class FailingCamera(MockCamera):
+    def _capture(self, dest):
+        dest.write_bytes(b"partial")
+        raise RuntimeError("lens fell off")
+
+
+def test_multiple_cameras_one_image_each(tmp_path):
+    app = make_app(tmp_path, names=("north", "south", "csi0"))
+    app.capture_once()
+    names = sorted(p.name.split("_", 1)[1] for p in tmp_path.rglob("*.jpg"))
+    assert names == ["csi0.jpg", "north.jpg", "south.jpg"]
+    caps = [m[1] for m in app.iot.messages if m[0] == "capture"]
+    assert [c["camera"] for c in caps] == ["north", "south", "csi0"]
+    assert app.capture_count == 3
+    assert all(s["captures"] == 1 for s in app.camera_stats.values())
+
+
+def test_capture_single_camera(tmp_path):
+    app = make_app(tmp_path, names=("north", "south"))
+    app.capture_once(camera="south")
+    assert [p.name.split("_", 1)[1] for p in tmp_path.rglob("*.jpg")] == ["south.jpg"]
+    with pytest.raises(ValueError):
+        app.capture_once(camera="east")
+    with pytest.raises(ValueError):
+        app.handle_command({"action": "capture", "camera": "east"})
+
+
+def test_failing_camera_does_not_block_others(tmp_path):
+    good = CameraConfig(name="good", backend="mock", width=64, height=48)
+    bad = CameraConfig(name="bad", backend="mock", width=64, height=48)
+    cfg = Config(cameras=[bad, good], storage=StorageConfig(base_dir=tmp_path, min_free_mb=0))
+    app = BuoyApp(cfg, cameras=[FailingCamera(bad), MockCamera(good)], iot=FakeIot())
+    app.capture_once()
+    assert [p.name.split("_", 1)[1] for p in tmp_path.rglob("*.jpg*")] == ["good.jpg"]
+    assert app.camera_stats["bad"]["errors"] == 1 and "lens fell off" in app.camera_stats["bad"]["last_error"]
+    assert app.camera_stats["good"]["captures"] == 1
+    err = [m[1] for m in app.iot.messages if m[0] == "status"][0]
+    assert err["state"] == "error" and err["camera"] == "bad"
+
+
+def test_status_reports_every_camera(tmp_path):
+    app = make_app(tmp_path, names=("a", "b"))
+    app.capture_once()
+    app.handle_command({"action": "status"})
+    status = app.iot.messages[-1][1]
+    assert set(status["cameras"]) == {"a", "b"}
+    assert status["cameras"]["a"]["captures"] == 1
+    assert status["last_image"].endswith((".jpg"))
+
+
+def test_app_requires_a_camera(tmp_path):
+    cfg = Config(cameras=[], storage=StorageConfig(base_dir=tmp_path, min_free_mb=0))
+    with pytest.raises(RuntimeError, match="no cameras configured"):
+        BuoyApp(cfg)
+
+
+def test_command_capture_targets_one_camera_in_run_loop(tmp_path):
+    app = make_app(tmp_path, interval=3600, names=("a", "b"))
+    t = threading.Thread(target=app.run)
+    t.start()
+    app.handle_command({"action": "capture", "camera": "b"})
+    time.sleep(0.5)
+    app.stop()
+    t.join(5)
+    caps = [m[1] for m in app.iot.messages if m[0] == "capture"]
+    assert [(c["camera"], c["trigger"]) for c in caps] == [("b", "command")]

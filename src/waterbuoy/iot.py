@@ -2,9 +2,10 @@
 
 Topics (prefix defaults to waterbuoy/<thing>):
   <prefix>/status   published: online/offline (LWT), heartbeat/status replies
-  <prefix>/capture  published: one message per stored image
+  <prefix>/capture  published: one message per stored image (includes "camera": <name>)
   <prefix>/cmd      subscribed: JSON commands, e.g.
-                    {"action": "capture"}
+                    {"action": "capture"}                      (all cameras)
+                    {"action": "capture", "camera": "cam0"}    (one camera)
                     {"action": "set_interval", "seconds": 600}
                     {"action": "status"}
 """

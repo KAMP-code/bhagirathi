@@ -2,19 +2,55 @@
 
 from __future__ import annotations
 
+import re
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
+
+
+BACKENDS = ("usb", "picamera2", "rpicam-still", "mock")
+_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+
+
+@dataclass
+class CameraConfig:
+    """One camera. Any field left out of a [[camera]] table falls back to [capture]."""
+
+    name: str = "cam0"                 # used in file names and IoT messages
+    backend: str = "usb"               # "usb" | "picamera2" | "rpicam-still" | "mock"
+    width: int = 0                     # 0 = largest resolution the camera supports
+    height: int = 0
+    jpeg_quality: int = 90
+    # usb: V4L2 device node, preferably a stable /dev/v4l/by-id/... link.
+    # picamera2/rpicam-still: optional libcamera camera Id (see `waterbuoy --list-cameras`).
+    device: str = ""
+    # picamera2/rpicam-still: which ribbon camera (0 = first), used when `device` is empty.
+    index: int = 0
+    input_format: str = "auto"         # usb: "auto" | "mjpeg" | "yuyv422" | ... (V4L2 format)
+    warmup_frames: int = 30            # usb: frames discarded so auto-exposure can settle
+
+    def validate(self) -> None:
+        if not _NAME_RE.match(self.name):
+            raise ValueError(f"camera name {self.name!r} must be 1-32 chars of A-Z a-z 0-9 _ -")
+        if self.backend not in BACKENDS:
+            raise ValueError(f"camera {self.name}: unknown backend {self.backend!r} (one of {BACKENDS})")
+        if self.width < 0 or self.height < 0 or (self.width == 0) != (self.height == 0):
+            raise ValueError(f"camera {self.name}: set both width and height, or both to 0 (auto)")
+        if not 1 <= self.jpeg_quality <= 100:
+            raise ValueError(f"camera {self.name}: jpeg_quality must be 1..100")
+        if self.warmup_frames < 0 or self.index < 0:
+            raise ValueError(f"camera {self.name}: warmup_frames and index must be >= 0")
+        if self.backend == "usb" and not self.device:
+            raise ValueError(f"camera {self.name}: usb backend needs `device`")
+
+
+CAMERA_KEYS = {f.name for f in fields(CameraConfig)}
 
 
 @dataclass
 class CaptureConfig:
     interval_seconds: int = 300
     align_to_clock: bool = True
-    backend: str = "picamera2"
-    width: int = 2304
-    height: int = 1296
-    jpeg_quality: int = 90
 
 
 @dataclass
@@ -67,6 +103,7 @@ class AlgaeConfig:
 class Config:
     thing_name: str = "waterbuoy-01"
     capture: CaptureConfig = field(default_factory=CaptureConfig)
+    cameras: list[CameraConfig] = field(default_factory=list)
     storage: StorageConfig = field(default_factory=StorageConfig)
     iot: IotConfig = field(default_factory=IotConfig)
     algae: AlgaeConfig = field(default_factory=AlgaeConfig)
@@ -89,11 +126,13 @@ def load_config(path: str | Path) -> Config:
     # Relative paths are resolved against the project root (parent of config/).
     root = path.parent.parent if path.parent.name == "config" else path.parent
 
-    cap = CaptureConfig(**raw.get("capture", {}))
+    cap_raw = dict(raw.get("capture", {}))
+    # Camera keys under [capture] are defaults for every [[camera]].
+    defaults = {k: cap_raw.pop(k) for k in list(cap_raw) if k in CAMERA_KEYS}
+    cap = CaptureConfig(**cap_raw)
     if cap.interval_seconds < 1:
         raise ValueError("capture.interval_seconds must be >= 1")
-    if cap.backend not in ("picamera2", "rpicam-still", "mock"):
-        raise ValueError(f"unknown capture.backend: {cap.backend!r}")
+    cameras = parse_cameras(raw.get("camera"), defaults)
 
     st_raw = dict(raw.get("storage", {}))
     if "base_dir" in st_raw:
@@ -109,4 +148,26 @@ def load_config(path: str | Path) -> Config:
     algae = AlgaeConfig(**raw.get("algae", {}))
 
     thing = raw.get("device", {}).get("thing_name", "waterbuoy-01")
-    return Config(thing_name=thing, capture=cap, storage=st, iot=iot, algae=algae)
+    return Config(thing_name=thing, capture=cap, cameras=cameras, storage=st, iot=iot, algae=algae)
+
+
+def parse_cameras(tables: list[dict] | None, defaults: dict | None = None) -> list[CameraConfig]:
+    """Build the camera list from [[camera]] tables (or one camera from [capture] defaults)."""
+    defaults = defaults or {}
+    if not tables:
+        tables = [{}]  # old single-camera config: everything is in [capture]
+    if not isinstance(tables, list):
+        raise ValueError("cameras must be declared as [[camera]] tables")
+    cams = []
+    for i, t in enumerate(tables):
+        unknown = set(t) - CAMERA_KEYS
+        if unknown:
+            raise ValueError(f"[[camera]] #{i + 1}: unknown keys {sorted(unknown)}")
+        merged = {"name": f"cam{i}", **defaults, **t}
+        cam = CameraConfig(**merged)
+        cam.validate()
+        cams.append(cam)
+    names = [c.name for c in cams]
+    if len(set(names)) != len(names):
+        raise ValueError(f"camera names must be unique: {names}")
+    return cams

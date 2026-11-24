@@ -26,8 +26,3 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-markers = [
-    "camera: needs a real Raspberry Pi camera (skipped if none; WATERBUOY_REQUIRE_CAMERA=1 to fail instead)",
-    "no_camera: runs only when no camera is attached (error-path checks)",
-    "rpicam: needs the rpicam-still binary",
-]

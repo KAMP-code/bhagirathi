@@ -4,8 +4,7 @@ from PIL import Image
 
 from waterbuoy.algae import analyze_array, analyze_image, iter_images, main, save_overlay
 from waterbuoy.app import BuoyApp
-from waterbuoy.camera import MockCamera
-from waterbuoy.config import AlgaeConfig, CaptureConfig, Config, StorageConfig, load_config
+from waterbuoy.config import AlgaeConfig, CameraConfig, CaptureConfig, Config, StorageConfig, load_config
 
 from .test_app import FakeIot
 
@@ -114,11 +113,12 @@ def test_cli_scan_sorts_images(tmp_path, capsys):
 
 def test_app_publishes_algae_result(tmp_path):
     cfg = Config(
-        capture=CaptureConfig(backend="mock", width=64, height=48, align_to_clock=False),
+        capture=CaptureConfig(align_to_clock=False),
+        cameras=[CameraConfig(backend="mock", width=64, height=48)],
         storage=StorageConfig(base_dir=tmp_path, min_free_mb=0),
         algae=AlgaeConfig(enabled=True),
     )
-    app = BuoyApp(cfg, camera=MockCamera(cfg.capture), iot=FakeIot())
+    app = BuoyApp(cfg, iot=FakeIot())
     app.capture_once()
     kind, info = app.iot.messages[-1]
     assert kind == "capture"

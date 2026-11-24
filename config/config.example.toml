@@ -7,10 +7,35 @@ thing_name = "waterbuoy-01"
 [capture]
 interval_seconds = 300          # 5 minutes
 align_to_clock = true           # capture at :00, :05, :10 ... instead of 5 min after start
-backend = "picamera2"           # "picamera2" | "rpicam-still" | "mock"
-width = 2304
-height = 1296
+# Any camera setting placed here is the default for every [[camera]] below.
 jpeg_quality = 90
+warmup_frames = 30              # usb: frames dropped before each shot so exposure settles (~1 s)
+
+# One [[camera]] table per camera; every picture cycle captures from all of them.
+# Every listed camera must be present: the service will not start without it.
+# Run `python -m waterbuoy --list-cameras` to print ready-made tables for attached cameras.
+#
+#   name          used in file names (20261124T190224Z_<name>.jpg) and IoT messages
+#   backend       "usb" (any UVC webcam) | "picamera2" | "rpicam-still" (Pi ribbon camera) | "mock"
+#   device        usb: /dev/v4l/by-id/... link (or /dev/v4l/by-path/... = fixed USB port)
+#                 ribbon: optional libcamera Id; otherwise `index` picks the camera (0, 1)
+#   width/height  0 = largest the camera supports; else must be a supported mode
+#   input_format  usb: "auto" (MJPEG if possible, else raw YUV) | "mjpeg" | "yuyv422" | ...
+
+[[camera]]
+name = "cam0"
+backend = "usb"
+device = "/dev/video0"          # better: the /dev/v4l/by-id/usb-...-video-index0 link
+width = 1920
+height = 1080
+
+# A second camera, e.g. a Pi ribbon camera:
+# [[camera]]
+# name = "csi0"
+# backend = "picamera2"
+# index = 0
+# width = 2304
+# height = 1296
 
 [storage]
 # Point this at the mounted hard drive, e.g. /mnt/hdd/waterbuoy/images

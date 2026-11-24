@@ -5,9 +5,10 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from pathlib import Path
 from datetime import datetime, timezone
 
-from .camera import Camera, make_camera
+from .camera import Camera, make_cameras
 from .config import Config
 from .storage import ImageStore
 
@@ -22,18 +23,27 @@ def seconds_until_next(interval: int, align: bool, now: float | None = None) -> 
 
 
 class BuoyApp:
-    def __init__(self, cfg: Config, camera: Camera | None = None, store: ImageStore | None = None, iot=None):
+    def __init__(self, cfg: Config, cameras: list[Camera] | None = None, store: ImageStore | None = None,
+                 iot=None):
         self.cfg = cfg
         self.interval = cfg.capture.interval_seconds
+        # Every configured camera must open; a missing one stops start-up (systemd retries).
+        self.cameras = cameras if cameras is not None else make_cameras(cfg.cameras)
+        if not self.cameras:
+            raise ValueError("at least one camera is required")
+        names = [c.name for c in self.cameras]
+        if len(set(names)) != len(names):
+            raise ValueError(f"camera names must be unique: {names}")
         self.store = store or ImageStore(cfg.storage.base_dir, cfg.storage.min_free_mb)
-        self.camera = camera or make_camera(cfg.capture)
         self.iot = iot
         self._stop = threading.Event()
         self._wake = threading.Event()        # interrupts the sleep (interval changed / manual capture)
         self._capture_now = threading.Event()
+        self._capture_only: str | None = None   # camera name requested by a capture command
         self.capture_count = 0
         self.error_count = 0
-        self.last_image: str | None = None
+        self.camera_stats = {n: {"captures": 0, "errors": 0, "last_image": None, "last_error": None}
+                             for n in names}
         self.last_algae: dict | None = None
 
         if self.iot is None and cfg.iot.enabled:
@@ -41,29 +51,48 @@ class BuoyApp:
             self.iot = IotClient(cfg, self.handle_command)
 
     # --- capture ---------------------------------------------------------
-    def capture_once(self, trigger: str = "schedule") -> None:
+    def capture_once(self, trigger: str = "schedule", camera: str | None = None) -> None:
+        """Take one picture with every camera (or only `camera`). A failing camera never
+        stops the others."""
+        cams = self.cameras if camera is None else [c for c in self.cameras if c.name == camera]
+        if not cams:
+            raise ValueError(f"unknown camera {camera!r}; have {[c.name for c in self.cameras]}")
+        for cam in cams:
+            self._capture_camera(cam, trigger)
+
+    def _capture_camera(self, cam: Camera, trigger: str) -> None:
+        stats = self.camera_stats[cam.name]
         ts = datetime.now(timezone.utc)
         t0 = time.monotonic()
         try:
-            path = self.store.save(ts, self.camera.capture)
+            path = self.store.save(ts, cam.capture, camera=cam.name)
         except Exception as e:  # noqa: BLE001 - keep the service running
             self.error_count += 1
-            log.exception("capture failed")
+            stats["errors"] += 1
+            stats["last_error"] = str(e)[:500]
+            log.exception("capture failed on camera %s", cam.name)
             if self.iot:
-                self.iot.publish_status("error", error=str(e)[:500], trigger=trigger)
+                self.iot.publish_status("error", camera=cam.name, error=str(e)[:500], trigger=trigger)
             return
         self.capture_count += 1
-        self.last_image = str(path)
+        stats["captures"] += 1
+        stats["last_image"] = str(path)
         size = path.stat().st_size
-        log.info("saved %s (%d bytes, %.2fs, %s)", path, size, time.monotonic() - t0, trigger)
+        log.info("%s: saved %s (%d bytes, %.2fs, %s)", cam.name, path, size, time.monotonic() - t0, trigger)
         extra = {}
         if self.cfg.algae.enabled:
             extra["algae"] = self._analyze_algae(path)
         if self.iot:
             self.iot.publish_capture(
-                file=str(path), size_bytes=size, captured_at=ts.isoformat(), trigger=trigger,
+                camera=cam.name, file=str(path), size_bytes=size, captured_at=ts.isoformat(), trigger=trigger,
                 **extra, **self.store.stats(),
             )
+
+    @property
+    def last_image(self) -> str | None:
+        """Most recent image from any camera."""
+        imgs = [s["last_image"] for s in self.camera_stats.values() if s["last_image"]]
+        return max(imgs, key=lambda p: Path(p).name) if imgs else None
 
     def _analyze_algae(self, path) -> dict:
         # Analysis must never break capture: report the error in the payload instead.
@@ -81,6 +110,10 @@ class BuoyApp:
     def handle_command(self, cmd: dict) -> None:
         action = cmd.get("action")
         if action == "capture":
+            cam = cmd.get("camera")
+            if cam is not None and cam not in self.camera_stats:
+                raise ValueError(f"unknown camera {cam!r}")
+            self._capture_only = cam
             self._capture_now.set()
             self._wake.set()
         elif action == "set_interval":
@@ -100,14 +133,17 @@ class BuoyApp:
         if self.iot:
             self.iot.publish_status(
                 "online", interval_seconds=self.interval, captures=self.capture_count,
-                errors=self.error_count, last_image=self.last_image, last_algae=self.last_algae, **self.store.stats(),
+                errors=self.error_count, last_image=self.last_image, last_algae=self.last_algae,
+                cameras={c.name: {**c.info(), **self.camera_stats[c.name]} for c in self.cameras},
+                **self.store.stats(),
             )
 
     # --- main loop -------------------------------------------------------
     def run(self) -> None:
         if self.iot:
             self._connect_iot()
-        log.info("capturing every %ds into %s", self.interval, self.store.base_dir)
+        log.info("capturing every %ds from %s into %s", self.interval,
+                 ", ".join(c.name for c in self.cameras), self.store.base_dir)
         try:
             while not self._stop.is_set():
                 delay = seconds_until_next(self.interval, self.cfg.capture.align_to_clock)
@@ -120,7 +156,7 @@ class BuoyApp:
                         self._wake.clear()
                         if self._capture_now.is_set():
                             self._capture_now.clear()
-                            self.capture_once(trigger="command")
+                            self.capture_once(trigger="command", camera=self._capture_only)
                         else:  # interval changed: recompute schedule
                             fired = False
                             break
@@ -155,5 +191,6 @@ class BuoyApp:
     def shutdown(self) -> None:
         if self.iot:
             self.iot.disconnect()
-        self.camera.close()
+        for cam in self.cameras:
+            cam.close()
         log.info("stopped")
