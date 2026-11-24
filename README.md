@@ -13,6 +13,8 @@ src/waterbuoy/
   iot.py       AWS IoT Core MQTT client (awsiotsdk)
   app.py       scheduler loop + command handling
   algae.py     algal-bloom detection (colour indices) + scan CLI
+  servo.py     hobby servo control (SG90) on any GPIO pin via lgpio
+scripts/servo_demo.py
 config/config.example.toml
 systemd/waterbuoy.service
 tests/
@@ -117,6 +119,34 @@ Sort stored images into clean / contaminated sets:
     --sort-into /tmp/algae-sorted --overlay --csv /tmp/algae.csv
 # -> /tmp/algae-sorted/{clean,suspect,bloom,unknown}/  (symlinks + magenta debug overlays)
 ```
+
+## Servo
+
+A TowerPro SG90 on GPIO16 (physical pin 36): brown = GND, red = +5 V, orange = signal.
+Power it from 5 V and share ground with the Pi; use a separate 5 V supply if the Pi resets
+or the servo stutters (a stalled SG90 draws ~700 mA). Needs `sudo apt install python3-lgpio`
+and the user in the `gpio` group.
+
+```python
+from waterbuoy.servo import Servo
+
+with Servo(16) as s:            # SG90 defaults: 0-180 deg = 500-2400 us pulses at 50 Hz
+    s.angle = 90                # jump
+    s.move_to(0, speed=60)      # smooth sweep at 60 deg/s (blocking)
+    s.detach()                  # stop pulses: no hum, no holding current
+```
+
+If the servo buzzes or strains at an end, narrow the range: `Servo(16, min_pulse_us=600, max_pulse_us=2300)`.
+
+```bash
+.venv/bin/python scripts/servo_demo.py              # demo: jumps, sweeps, wave, detach
+.venv/bin/python scripts/servo_demo.py --angle 45   # hold 45 deg until Ctrl+C
+.venv/bin/pytest tests/integration/test_servo_hw.py -v
+```
+
+The integration test moves the servo and reads GPIO16 back to check each pulse width
+(within 50 us of the target) and the 50 Hz rate. The SG90 has no position feedback, so
+check by eye that the horn follows.
 
 ## Run
 
