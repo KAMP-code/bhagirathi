@@ -14,7 +14,11 @@ src/waterbuoy/
   app.py       scheduler loop + command handling
   algae.py     algal-bloom detection (colour indices) + scan CLI
   servo.py     hobby servo control on any GPIO pin via lgpio
+  distance_sensor.py  ultrasonic distance sensor (Trig/Echo) via lgpio
+  water_classifier.py clean / green / no water (pretrained YOLOv8, no training)
 scripts/servo_demo.py
+scripts/distance_demo.py
+scripts/water_demo.py
 config/config.example.toml
 systemd/waterbuoy.service
 tests/
@@ -147,6 +151,59 @@ If the servo buzzes or strains at an end, narrow the range: `Servo(16, min_pulse
 The integration test moves the servo and reads GPIO16 back to check each pulse width
 (within 50 us of the target) and the 50 Hz rate. A hobby servo has no position feedback, so
 check by eye that the horn follows.
+
+## Distance sensor
+
+An ultrasonic Trig/Echo sensor (HC-SR04 style): VCC = +5 V, GND = GND, Trig -> GPIO23
+(physical pin 16), Echo -> GPIO24 (physical pin 18). Echo is a 5 V signal, so put a
+voltage divider on it (e.g. 1 kOhm in series, 2 kOhm to GND) to protect the 3.3 V pin.
+
+```python
+from waterbuoy.distance_sensor import DistanceSensor
+
+with DistanceSensor(trig=23, echo=24) as d:
+    print(d.read())             # metres, median of 5 pings; None if no echo
+```
+
+```bash
+.venv/bin/python scripts/distance_demo.py           # live distance to your hand
+.venv/bin/pytest tests/integration/test_distance_sensor_hw.py -v
+```
+
+The integration test needs the sensor pointed at something still within 2 cm - 4 m.
+
+## Water classifier and green-water demo
+
+`water_classifier.py` labels an image `clean_water`, `green_water` or `no_water` with no
+training. A pretrained YOLOv8 ImageNet classifier (`yolov8s-cls.pt`, downloaded once to
+`~/waterbuoy-data/models/`) decides *water or not*: the probability it gives to water
+scenes, boats and water animals (lakeside, dam, canoe, water snake...) is the water score.
+The share of strongly green pixels then separates green from clean water.
+
+```bash
+.venv/bin/pip install -e .[vision]          # ultralytics (YOLOv8)
+```
+
+```python
+from waterbuoy.water_classifier import WaterClassifier
+
+clf = WaterClassifier()
+print(clf.classify("testimages/green-water-001.png"))   # green_water (water 0.54, green 0.25)
+```
+
+The demo watches the webcam; when it sees green water (2 frames in a row) the servo on
+GPIO16 turns to 180 degrees, waits 5 s and returns to 0. Show it water pictures on a phone,
+a screen or on paper.
+
+```bash
+.venv/bin/python scripts/water_demo.py                      # live webcam + preview window
+.venv/bin/python scripts/water_demo.py --no-show            # no window
+.venv/bin/python scripts/water_demo.py --images testimages/*   # classify files
+.venv/bin/pytest tests/integration/test_water_classifier_hw.py -v
+```
+
+Thresholds (`water_threshold=0.15`, `green_threshold=0.10`) were set on the images in
+`testimages/`; check them on pictures from the real site.
 
 ## Run
 

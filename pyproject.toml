@@ -15,6 +15,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+vision = ["ultralytics>=8.3"]   # water_classifier (YOLOv8)
 
 [project.scripts]
 waterbuoy = "waterbuoy.__main__:main"
